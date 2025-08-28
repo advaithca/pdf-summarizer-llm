@@ -1,70 +1,99 @@
 import streamlit as st
-import fitz  # PyMuPDF
+import fitz  # PyMuPDF for PDFs
+import pandas as pd
 import ollama
 
-# ----------------------------
-# Utility: Extract text from PDFs
-# ----------------------------
-def extract_text_from_pdf(file):
-    """Extract text from a single PDF file."""
-    doc = fitz.open(stream=file.read(), filetype="pdf")
-    text = ""
-    for page in doc:
-        text += page.get_text("text")
-    return text
+# ------------------------
+# File Loaders
+# ------------------------
+def load_file(file):
+    if file.type == "application/pdf":
+        doc = fitz.open(stream=file.read(), filetype="pdf")
+        text = ""
+        for page in doc:
+            text += page.get_text()
+        return text
+
+    elif file.type in ["text/plain", "application/txt"]:
+        return file.read().decode("utf-8")
+
+    elif file.type in ["text/csv", "application/vnd.ms-excel"]:
+        df = pd.read_csv(file)
+        return df.to_string()
+
+    else:
+        return "⚠️ Unsupported file type"
 
 
-# ----------------------------
-# Summarize text with Ollama
-# ----------------------------
-def summarize_text(text, model="llama3.2:latest", max_words=500):
-    """Send extracted text to Ollama for summarization."""
-    prompt = f"Summarize the following text in about {max_words} words:\n\n{text}"
-    response = ollama.chat(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response["message"]["content"]
-
-
-# ----------------------------
-# Streamlit UI
-# ----------------------------
-st.set_page_config(page_title="PDF Summarizer (Offline)", layout="wide")
-st.title("📄 PDF Summarizer (Offline with Ollama + LLaMA)")
-
-uploaded_files = st.file_uploader(
-    "Upload one or more PDF files",
-    type=["pdf"],
-    accept_multiple_files=True,
-)
-
-max_words = st.slider("Summary length (approx. words)", 100, 1000, 400, 50)
+# ------------------------
+# Streamlit App
+# ------------------------
+st.title("Chat with Multiple Files (Ollama-powered)")
 
 # Get available models from Ollama
-try:
-    available_models = [m.model for m in ollama.list().models]
-except Exception as e:
-    available_models = []
-    st.error(f"Could not fetch models from Ollama: {e}")
+models_resp = ollama.list()
+models = [m.model for m in models_resp.models]
 
-if available_models:
-    model_name = st.selectbox("Choose Ollama model", available_models, index=0)
-else:
-    model_name = None
-    st.warning("⚠️ No models found. Make sure you have pulled or created models with `ollama pull` or `ollama create`.")
+if not models:
+    st.error("⚠️ No Ollama models found. Run `ollama pull llama3` (or another model) to use this app.")
+    st.stop()
 
-if uploaded_files and model_name and st.button("Summarize"):
-    all_texts = []
+model_choice = st.selectbox("Choose Ollama model:", models)
+
+# File uploader
+uploaded_files = st.file_uploader(
+    "Upload files (PDF, TXT, CSV)", type=["pdf", "txt", "csv"], accept_multiple_files=True
+)
+
+# Session memory (all files in one session, but kept separated)
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if uploaded_files:
+    # Load and structure content per file
+    file_contexts = {}
     for file in uploaded_files:
-        st.write(f"📖 Extracting text from **{file.name}** ...")
-        text = extract_text_from_pdf(file)
-        all_texts.append(text)
+        if file.name not in file_contexts:
+            file_contexts[file.name] = load_file(file)
 
-    combined_text = "\n\n".join(all_texts)
+    # Display conversation history
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-    with st.spinner(f"Summarizing with {model_name}..."):
-        summary = summarize_text(combined_text, model=model_name, max_words=max_words)
+    # User input
+    if prompt := st.chat_input("Ask about your files..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("assistant"):
+            # System prompt ensures separation between files
+            system_prompt = (
+                "You are an assistant that answers questions about multiple files. "
+                "Each file must be treated separately. "
+                "If a question is about one file, answer only from that file. "
+                "If it involves multiple files, answer per-file without mixing their contents.\n\n"
+            )
 
-    st.subheader("📝 Summary")
-    st.write(summary)
+            file_prompts = "\n\n".join(
+                [f"--- Start of {fname} ---\n{content}\n--- End of {fname} ---"
+                for fname, content in file_contexts.items()]
+            )
+
+            print(file_prompts)
+            stream = ollama.chat(
+                model=model_choice,
+                messages=[
+                    {"role": "system", "content": system_prompt + file_prompts},
+                    *st.session_state.messages
+                ],
+                stream=True,
+            )
+
+             # ✅ This part fixes your issue
+            response_text = ""
+            placeholder = st.empty()
+            for chunk in stream:
+                if hasattr(chunk, "message") and chunk.message and chunk.message.content:
+                    response_text += chunk.message.content
+                    placeholder.markdown(response_text)
+
+        st.session_state.messages.append({"role": "assistant", "content": response_text})
