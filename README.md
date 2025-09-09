@@ -9,7 +9,7 @@ It allows you to upload one or more PDF files, process their contents, and gener
 - Upload **single or multiple PDFs**.
 - Extracts and cleans text from PDFs.
 - Summarizes content using **Ollama LLaMA models**.
-- Runs **completely offline** (air-gapped friendly).
+- Runs **completely offline**.
 - GPU support (if available).
 
 ---
@@ -38,7 +38,7 @@ Your requirements.txt should contain:
 
 Follow the official instructions for your OS.
 
-### 4. Download the LLaMA model
+### 4. Download the LLaMA model (Or any model that you prefer) (Below instructions are for llama3.2, run it in the command line)
 ```ollama pull llama3.2```
 
 
